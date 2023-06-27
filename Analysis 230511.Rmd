@@ -1,0 +1,191 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+Chen2022.data <- read.table("GSM4203181_data.matrix.txt")
+Chen2022<- CreateSeuratObject(counts = Chen2022.data, min.cells = 3, min.features = 200)
+Chen2022[["percent.mt"]] <- PercentageFeatureSet(Chen2022, pattern = "^MT")
+VlnPlot(Chen2022, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size=0.01, ncol = 3)
+```
+```{r}
+Chen2022 <- subset(Chen2022, subset = nFeature_RNA > 100 & nFeature_RNA < 7000)
+    Chen2022 <- NormalizeData(Chen2022)
+    Chen2022 <- FindVariableFeatures(Chen2022, selection.method = "vst", nfeatures = 2000)
+    
+# Run the standard workflow for visualization and clustering
+Chen2022 <- ScaleData(Chen2022, verbose = FALSE)
+Chen2022 <- RunPCA(Chen2022, npcs = 50, verbose = FALSE)
+ElbowPlot(Chen2022, ndims = 50)
+
+# Umap and Clustering
+
+Chen2022 <- FindNeighbors(Chen2022, reduction = "pca", dims = 1:20)
+Chen2022 <- FindClusters(Chen2022, resolution = 0.8)
+Chen2022 <- RunUMAP(Chen2022, dims = 1:20, reduction = "pca", perplexity = 30)
+DimPlot(Chen2022)
+```
+```{r}
+Chen2022$CellType <- Idents(Chen2022)
+DimPlot(Chen2022, label=TRUE)+NoLegend()
+VlnPlot(Chen2022, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"), pt.size=0.01, group.by = "seurat_clusters")
+```
+```{r}
+#Cluster ids
+DotPlot(Chen2022, features=c("EPCAM", "KRT8", "TACSTD2", "TMPRSS2", "PECAM1", "COL1A1", "ACTA2","PTPRC", "CD3E","CD4", "S100A8", "CD79A", "MS4A2"), col.min = 0.1, dot.min=0.05, assay = 'RNA')+RotatedAxis()
+```
+```{r}
+#Signatures
+
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Chen2022))) {
+
+z <- FindMarkers(Chen2022,ident.1 = sort(levels(Chen2022))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Chen2022))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-dplyr::filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Chen2022_230307.csv") 
+remove(z)
+```
+
+```{r}
+test<-data.frame()
+for (i in unique(Signatures$cluster))
+    {
+  in_cluster<-Signatures$cluster==i
+  test<-rbind(test, Signatures[in_cluster,][1:20,])
+}
+```
+
+#cluster6 - ribosomal proteins, remove for low quality
+#cluster 18 - high ribosomal
+```{r}
+Chen2022@meta.data$patient=do.call(rbind, strsplit(rownames(Chen2022@meta.data),split = "[.]"))[,2]
+```
+
+```{r}
+Chen2022@active.ident<-Chen2022$seurat_clusters
+Chen2022$CellType<-Chen2022$seurat_clusters
+Idents(Chen2022)<-"CellType"
+new.ids <- c("Epithelial", "Epithelial", "Immune", "Epithelial", "Epithelial",
+             "Epithelial", "remove", "Epithelial", "Immune", "Endothelial", 
+             "Immune", "CAF", "Epithelial", "Epithelial", "Epithelial", 
+             "Endothelial",  "Epithelial", "Immune", "remove", "Endothelial",
+             "CAF", "Immune", "CAF", "Epithelial", "Endothelial")
+names(new.ids) <- levels(Chen2022)
+Chen2022<- RenameIdents(Chen2022, new.ids)
+
+Chen2022$CellType <-Chen2022@active.ident
+Chen2022@active.ident<- factor(Chen2022@active.ident, levels=rev(c("Immune", "CAF", "Endothelial", "Epithelial", "remove")))
+DimPlot(Chen2022, split.by = 'patient', label=TRUE)
+DimPlot(Chen2022, label=TRUE)
+```
+```{r}
+Chen2022<-subset(Chen2022, idents="remove", invert=TRUE)
+Chen2022$patient<-as.factor(Chen2022$patient)
+Chen2022@active.ident<-Chen2022$patient
+Chen2022<-subset(Chen2022, idents ="8", invert=TRUE)
+Chen2022<-RunUMAP(Chen2022, dims = 1:20, reduction = "pca", perplexity = 30)
+DimPlot(Chen2022, group.by="CellType", label=TRUE)+NoLegend()
+```
+```{r}
+#Analysis of epithelial populations
+Chen2022@active.ident<-Chen2022$CellType
+E_Chen2022<-subset(Chen2022, idents = 'Epithelial')
+#re-cluster
+E_Chen2022<-FindNeighbors(E_Chen2022, reduction = "pca", dims = 1:20)
+E_Chen2022<-FindClusters(E_Chen2022, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+E_Chen2022<-RunUMAP(E_Chen2022, dims = 1:20, reduction = "pca", perplexity = 30)
+E_Chen2022$ECellType <- Idents(E_Chen2022)
+DimPlot(E_Chen2022, label = TRUE)
+DimPlot(E_Chen2022, split.by = "patient", label=TRUE, ncol=7)
+VlnPlot(E_Chen2022, features = c("nFeature_RNA", "nCount_RNA"), pt.size=0.01, ncol = 2)
+DotPlot(E_Chen2022, features=c("KRT5", "KRT14", "KRT19","TP63", "CDC20", "CCNB1", "CENPF","PTTG1", "AR", "KLK3", "ACPP", "FOXA1", "KRT8", "KRT18", "FOXP1"), col.min = 0)+RotatedAxis()
+```
+```{r}
+#Signatures_epithelialHS
+E_Chen2022@active.ident<-E_Chen2022$RNA_snn_res.0.9
+Signatures<-data.frame()
+
+for (i in 1:length(levels(E_Chen2022))) {
+
+z <- FindMarkers(E_Chen2022,ident.1 = sort(levels(E_Chen2022))[i], logfc.threshold = 0.25, min.pct = 0.1, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(E_Chen2022))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-dplyr::filter(Signatures, p_val_adj<=0.05)
+#write.table(x=Signatures, file = "Signatures_E_Chen2022_230330.csv") 
+remove(z)
+
+test<-data.frame()
+for (i in unique(Signatures$cluster))
+    {
+  in_cluster<-Signatures$cluster==i
+  test<-rbind(test, Signatures[in_cluster,][1:20,])
+}
+```
+```{r}
+E_Chen2022$metastasis<-E_Chen2022$patient
+E_Chen2022 <- SetIdent(E_Chen2022, value = E_Chen2022@meta.data$metastasis)
+E_Chen2022<-RenameIdents(E_Chen2022, 
+                                 `1`="non-meta",`2`="non-meta", `3`="non-meta", `4`="non-meta", `5`="non-meta",
+                                 `6`="non-meta",`7`="meta", `9`="non-meta", `10`="non-meta",
+                                 `11`="meta",`12`="non-meta", `13`="meta")
+E_Chen2022$metastasis<-E_Chen2022@active.ident
+DimPlot(E_Chen2022, split.by = "metastasis")
+```
+
+```{r}
+Chen2022$metastasis<-Chen2022$patient
+Chen2022 <- SetIdent(Chen2022, value = Chen2022@meta.data$metastasis)
+Chen2022<-RenameIdents(Chen2022, 
+                                 `1`="non-meta",`2`="non-meta", `3`="non-meta", `4`="non-meta", `5`="non-meta",
+                                 `6`="non-meta",`7`="meta", `8`="meta", `9`="non-meta", `10`="non-meta",
+                                 `11`="meta",`12`="non-meta", `13`="meta")
+Chen2022$metastasis<-Chen2022@active.ident
+DimPlot(Chen2022, split.by = "metastasis", label=TRUE, group.by = "CellType")
+```
+
+```{r}
+#EMT_25<-list(c("CBS","GRID2","FGL1","CDKN2A","AGT","HTRA1","LAMA5","SOX9","PRR16","LGR4","SPP1","COBLL1"))
+#E_Chen2022<-AddModuleScore(object = E_Chen2022, features = EMT_25, name = "EMT25_score")
+#Chen2022<-AddModuleScore(object = Chen2022, features = EMT_25, name = "EMT25_score")
+#VlnPlot(E_Chen2022, features="EMT25_score1", group.by = "metastasis", sort = "decreasing")+geom_boxplot(width=0.5)+ stat_compare_means(method="wilcox.test",label = "p.format")
+#FeaturePlot(Chen2022, features="EMT25_score1", min.cutoff = 0)
+
+EMT_50<-list(c("CBS","GRID2","FGL1","CDKN2A","AGT",
+        "HTRA1","LAMA5","SOX9","PRR16","LGR4",
+        "SPP1","COBLL1",
+        "DCLK1","CP","ANK1","TM4SF1","BMP1",
+        "GSTT1","GHR","BAIAP2L1","LMO7","DNAJC10",
+        "NFIB","CXCL5","MYO10","SORBS2","PHYH",
+        "IGFBP5","ESR1"))
+E_Chen2022<-AddModuleScore(object = E_Chen2022, features = EMT_50, name = "EMT50_score")
+Chen2022<-AddModuleScore(object = Chen2022, features = EMT_50, name = "EMT50_score")
+VlnPlot(E_Chen2022, features="EMT50_score1", group.by = "metastasis", sort = "decreasing", cols = c("#009193ff", "#ff2f92ff"), pt.size = 0)+geom_boxplot(width=0.3,fill="white", outlier.size = 0)+ylim(-0.25, 0.5)+ stat_compare_means(method="wilcox.test",label = "p.format")
+FeaturePlot(Chen2022, features="EMT50_score1", min.cutoff =0.1, max.cutoff = 0.5, cols = c("darkgrey","#ff2f92ff"), label=TRUE, order=TRUE)
+FeaturePlot(E_Chen2022, features="EMT50_score1", min.cutoff =0, max.cutoff = 0.5, cols = c("darkgrey","#ff2f92ff"), label=TRUE, order=TRUE)
+```
+```{r}
+IL6_high_25<-list(c("IL6","CCL11","DPEP1","HAS1","TNXB",
+"C1R","EBF2","MS4A4A"))
+Chen2022@active.ident<-Chen2022$CellType
+Chen2022<-AddModuleScore(object = Chen2022, features = IL6_high_25, name = "IL6high_25_score")
+FeaturePlot_scCustom(seurat_object = Chen2022, features = c("IL6high_25_score1"), order=T, min.cutoff = 0, max.cutoff=1, label=TRUE, colors_use = viridis_plasma_dark_high, na_color = "lightgray", na_cutoff = 0.1)
+VlnPlot(Chen2022, features="IL6high_25_score1", group.by = "metastasis", sort = "decreasing", idents = c("CAF", "Endothelial"))+geom_boxplot(width=0.5)+ stat_compare_means(method="wilcox.test",label = "p.format")
+
+IL6_high_50<-list(c("IL6","CCL11","DPEP1","HAS1","TNXB",
+"C1R","EBF2","MS4A4A",
+"C1S","TNFAIP6","C3","AEBP1","LUM",
+"SVEP1","CD34","SNED1","ENTPD2","SERPINA3"))
+Chen2022@active.ident<-Chen2022$CellType
+Chen2022<-AddModuleScore(object = Chen2022, features = IL6_high_50, name = "IL6high_50_score")
+FeaturePlot_scCustom(seurat_object = Chen2022, features = c("IL6high_50_score1"), order=T, min.cutoff = 0, max.cutoff=1, label=TRUE, colors_use = viridis_plasma_dark_high, na_color = "lightgray", na_cutoff = 0.1)
+VlnPlot(Chen2022, features="IL6high_50_score1", group.by = "metastasis", sort = "decreasing", idents = c("CAF", "Endothelial"), cols = c("#009193ff", "#ff2f92ff"), pt.size=0)+geom_boxplot(width=0.3,fill="white", outlier.size = 0)+ylim(0,1)+ stat_compare_means(method="wilcox.test",label = "p.format")
+```
+
+
