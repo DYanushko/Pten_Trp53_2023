@@ -1,0 +1,287 @@
+---
+title: "scATACreseq"
+output: html_notebook
+---
+```{r}
+library(Signac)
+library(Seurat)
+library(GenomeInfoDb)
+library(EnsDb.Mmusculus.v79)
+library(ggplot2)
+library(patchwork)
+set.seed(1234)
+```
+
+```{r}
+counts_combined <- Read10X_h5("//Volumes/Dasha_SSD/ATAC_reseq/S22194_AGG13/filtered_peak_bc_matrix.h5")
+metadata_combined <- read.csv(
+  file = "//Volumes/Dasha_SSD/ATAC_reseq/S22194_AGG13/singlecell.csv",
+  header = TRUE,
+  row.names = 1
+)
+combined_assay <- CreateChromatinAssay(
+  counts = counts_combined,
+  sep = c(":", "-"),
+  genome = "mm10",
+  fragments = '//Volumes/Dasha_SSD/ATAC_reseq/S22194_AGG13/fragments.tsv.gz',
+  min.cells = 1
+)
+```
+
+```{r}
+Pten_P53_ATAC <- CreateSeuratObject(
+  counts = combined_assay,
+  assay = 'peaks',
+  project = 'ATAC',
+  meta.data = metadata_combined
+)
+```
+```{r}
+# extract gene annotations from EnsDb
+annotations <- GetGRangesFromEnsDb(ensdb = EnsDb.Mmusculus.v79)
+
+# change to UCSC style since the data was mapped to hg19
+seqlevelsStyle(annotations) <- 'UCSC'
+
+# add the gene information to the object
+Annotation(Pten_P53_ATAC) <- annotations
+```
+
+```{r}
+#Metrics & Quality Control
+Pten_P53_ATAC <- NucleosomeSignal(object = Pten_P53_ATAC)
+Pten_P53_ATAC$nucleosome_group <- ifelse(Pten_P53_ATAC$nucleosome_signal > 4, 'NS > 4', 'NS < 4')
+FragmentHistogram(object = Pten_P53_ATAC, group.by = 'nucleosome_group', region = 'chr1-1-10000000')
+
+Pten_P53_ATAC <- TSSEnrichment(Pten_P53_ATAC, fast = FALSE)
+Pten_P53_ATAC$high.tss <- ifelse(Pten_P53_ATAC$TSS.enrichment > 2, 'High', 'Low')
+TSSPlot(Pten_P53_ATAC, group.by = 'high.tss') + NoLegend()
+Pten_P53_ATAC$pct_reads_in_peaks <- Pten_P53_ATAC$peak_region_fragments / Pten_P53_ATAC$passed_filters * 100
+Pten_P53_ATAC$blacklist_ratio <- Pten_P53_ATAC$blacklist_region_fragments / Pten_P53_ATAC$peak_region_fragments
+
+VlnPlot(
+  object = Pten_P53_ATAC,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 5
+)
+```
+
+```{r}
+Pten_P53_ATAC <- RunTFIDF(Pten_P53_ATAC)
+Pten_P53_ATAC <- FindTopFeatures(Pten_P53_ATAC, min.cutoff = 'q0')
+Pten_P53_ATAC <- RunSVD(object = Pten_P53_ATAC)
+
+Pten_P53_ATAC <- RunUMAP(
+  object = Pten_P53_ATAC,
+  reduction = 'lsi',
+  dims = 2:30
+)
+Pten_P53_ATAC <- FindNeighbors(
+  object = Pten_P53_ATAC,
+  reduction = 'lsi',
+  dims = 2:30
+)
+Pten_P53_ATAC <- FindClusters(
+  object = Pten_P53_ATAC,
+  algorithm = 3,
+  resolution = 1.2,
+  verbose = FALSE
+)
+
+DimPlot(object = Pten_P53_ATAC, label = TRUE) + NoLegend()
+
+VlnPlot(
+  object = Pten_P53_ATAC,
+  features = c('pct_reads_in_peaks', 'peak_region_fragments',
+               'TSS.enrichment', 'nucleosome_signal'),
+  pt.size = 0.1,
+  ncol = 2
+)
+```
+
+```{r}
+Pten_P53_ATAC<-subset(Pten_P53_ATAC, idents=c("4", "24"), invert=T)
+Pten_P53_ATAC <- RunUMAP(
+  object = Pten_P53_ATAC,
+  reduction = 'lsi',
+  dims = 2:30
+)
+Pten_P53_ATAC <- FindNeighbors(
+  object = Pten_P53_ATAC,
+  reduction = 'lsi',
+  dims = 2:30
+)
+Pten_P53_ATAC <- FindClusters(
+  object = Pten_P53_ATAC,
+  algorithm = 3,
+  resolution = 1,
+  verbose = FALSE
+)
+
+DimPlot(object = Pten_P53_ATAC, label = TRUE) + NoLegend()
+```
+
+```{r}
+# compute gene activities
+gene.activities <- GeneActivity(Pten_P53_ATAC)
+
+# add the gene activity matrix to the Seurat object as a new assay
+Pten_P53_ATAC[['RNA']] <- CreateAssayObject(counts = gene.activities)
+Pten_P53_ATAC <- NormalizeData(
+  object = Pten_P53_ATAC,
+  assay = 'RNA',
+  normalization.method = 'LogNormalize',
+  scale.factor = median(Pten_P53_ATAC$nCount_RNA)
+)
+DimPlot(Pten_P53_ATAC, group.by = "peaks_snn_res.1", label=TRUE)
+```
+
+```{r}
+#Identification of the signature
+DefaultAssay(Pten_P53_ATAC)<-"RNA"
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Pten_P53_ATAC))) 
+{
+z <- FindMarkers(Pten_P53_ATAC,ident.1 = sort(levels(Pten_P53_ATAC))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+  #z$NCBI_id <- mapIds(org.Mm.eg.db, z$gene, 'ENTREZID', 'SYMBOL')
+z$cluster <- sort(levels(Pten_P53_ATAC))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+write.table(x=Signatures, file = "Signatures_combined_221206.csv")
+```
+
+```{r}
+DefaultAssay(Pten_P53_ATAC) <- 'RNA'
+DotPlot(Pten_P53_ATAC, features = c("Cdh1", "Epcam", "Krt5", "Krt8", "Tacstd2", "Abo","Vim" ,"Ptprc", "S100a8", "Cd3e","Itgax","Cd79b", "Pecam1", "Svs5", "Col1a1", "Pdgfra", "Acta2", "Sfrp2", "Wnt2", "Il6"), col.min = 0.05, dot.min=0.01)+ RotatedAxis()
+```
+```{r}
+Pten_P53_ATAC@meta.data$samples=do.call(rbind, strsplit(rownames(Pten_P53_ATAC@meta.data),split = "-"))[,2]
+Pten_P53_ATAC$genotype<-Pten_P53_ATAC$samples
+Pten_P53_ATAC$genotype<-replace(Pten_P53_ATAC$genotype, Pten_P53_ATAC$samples=="1", "pten")
+Pten_P53_ATAC$genotype<-replace(Pten_P53_ATAC$genotype, Pten_P53_ATAC$samples=="2", "p53")
+```
+
+```{r}
+Pten_P53_ATAC@active.ident<-Pten_P53_ATAC$peaks_snn_res.1
+Pten_P53_ATAC$CellType<-Pten_P53_ATAC$peaks_snn_res.1
+Idents(Pten_P53_ATAC)<-"CellType"
+new.ids <- c("iCAF", "LumC", "MDSC", "LumC", "LumC", 
+             "Macrophage","LumA", "LumB", "LumC", "Endothelial", 
+             "LumC", "SV", "LumA", "Basal", "Ductal", 
+             "EMT", "Tcells", "MDSC", "myCAF", "DC", "Bcells")
+names(new.ids) <- levels(Pten_P53_ATAC)
+Pten_P53_ATAC <- RenameIdents(Pten_P53_ATAC, new.ids)
+
+Pten_P53_ATAC$CellType <-Pten_P53_ATAC@active.ident
+Pten_P53_ATAC@active.ident<- factor(Pten_P53_ATAC@active.ident, levels=rev(c("Macrophage", "iCAF", "MDSC", "LumC", "Tcells", "Bcells", "SV", "Endothelial", "myCAF", "Ductal", "Basal", "LumA", "LumB", "EMT", "DC")))
+DimPlot(Pten_P53_ATAC, label=TRUE)
+DimPlot(Pten_P53_ATAC, label = TRUE, split.by="samples")
+```
+```{r}
+# Load the pre-processed scRNA-seq data
+Object <- FindVariableFeatures(
+  object = Combi,
+  nfeatures = 3000
+)
+DefaultAssay(Pten_P53_ATAC)<-"RNA"
+transfer.anchors <- FindTransferAnchors(
+  reference = Object,
+  query = Pten_P53_ATAC,
+  reduction = 'cca',
+  dims = 1:40
+)
+
+predicted.labels <- TransferData(
+  anchorset = transfer.anchors,
+  refdata = Object$SCellType,
+  weight.reduction = Pten_P53_ATAC[['lsi']],
+  dims = 2:30
+)
+
+Pten_P53_ATAC <- AddMetaData(object = Pten_P53_ATAC, metadata = predicted.labels)
+
+plot1 <- DimPlot(Object, group.by = 'SCellType', label = TRUE, repel = TRUE)  + ggtitle('scRNA-seq')
+plot2 <- DimPlot(Pten_P53_ATAC, group.by = 'predicted.id', label = TRUE, repel = TRUE) +  ggtitle('scATAC-seq')
+plot1 + plot2
+```
+
+```{r}
+library(JASPAR2020)
+library(TFBSTools)
+library(BSgenome.Mmusculus.UCSC.mm10)
+
+#Adding motif information to the Seurat object
+# Get a list of motif position frequency matrices from the JASPAR database
+pfm <- getMatrixSet(
+  x = JASPAR2020,
+  opts = list(collection = "CORE", tax_group = 'vertebrates', all_versions = FALSE)
+)
+
+DefaultAssay(Pten_P53_ATAC)<-"peaks"
+# remove unusual chromosomes
+Pten_P53_ATAC=keepStandardChromosomes(Pten_P53_ATAC,pruning.mode="coarse")
+cleanchr=rownames(Pten_P53_ATAC)[startsWith(rownames(Pten_P53_ATAC),"chr")]
+Pten_P53_ATAC=subset(Pten_P53_ATAC,features = cleanchr)
+
+# add motif information
+Pten_P53_ATAC <- AddMotifs(
+  object = Pten_P53_ATAC,
+  genome = BSgenome.Mmusculus.UCSC.mm10,
+  pfm = pfm
+)
+```
+
+```{r}
+Pten_P53_ATAC <- RunChromVAR(
+  object = Pten_P53_ATAC,
+  genome = BSgenome.Mmusculus.UCSC.mm10
+)
+```
+
+```{r}
+Pten_P53_ATAC@active.ident<-Pten_P53_ATAC$CellType
+Pten_P53_ATAC$CellTypeGenotype <- paste(Idents(Pten_P53_ATAC), Pten_P53_ATAC$genotype, sep = "_")
+Idents(Pten_P53_ATAC) <- "CellTypeGenotype"
+DefaultAssay(Pten_P53_ATAC)<-"peaks"
+
+Pten_P53_ATAC$Fig3C<-Pten_P53_ATAC$CellType
+Pten_P53_ATAC@active.ident<-Pten_P53_ATAC$CellType
+Pten_P53_ATAC<-RenameIdents(Pten_P53_ATAC, `iCAF`="CAF", `myCAF`="CAF", `Ductal`="CAF", 
+                                   `MDSC`="Immune", `Macrophage`="Immune",`Tcells`="Immune", 
+                                   `Bcells`="Immune",  `DC`="Immune")
+Pten_P53_ATAC$Fig3C<-Pten_P53_ATAC@active.ident
+Idents(Pten_P53_ATAC)<-Pten_P53_ATAC$CellTypeGenotype
+DimPlot(Pten_P53_ATAC, group.by = "Fig3C", cells=WhichCells(Pten_P53_ATAC, idents=c("EMT_p53", "iCAF_p53", "LumC_p53", "MDSC_p53", "Macrophage_p53", "LumB_p53", "Endothelial_p53", "SV_p53", "myCAF_p53", "Ductal_p53", "Tcells_p53", "Bcells_p53", "Basal_p53", "DC_p53")), label=TRUE)+NoLegend()
+```
+
+```{r}
+#Fig3F
+DefaultAssay(Pten_P53_ATAC)<-"chromvar"
+VlnPlot(Pten_P53_ATAC, idents=c("LumC_p53", "EMT_p53"), features= "MA0144.2")+ggtitle("Stat3")+stat_compare_means(method = "Wilcoxon")+ylim(0,6)
+VlnPlot(Pten_P53_ATAC, idents=c("LumC_p53", "EMT_p53"), features="MA0488.1")+ggtitle("Jun")+stat_compare_means(method = "Wilcoxon")+ylim(0,8)
+```
+```{r}
+Pten_P53_ATAC@active.ident<-Pten_P53_ATAC$Fig3C
+Pten_P53_ATAC<-subset(Pten_P53_ATAC, idents="LumA", invert=TRUE) #2 cells only
+Pten_P53_ATAC@active.ident->Pten_P53_ATAC$Fig3C
+levels(Pten_P53_ATAC) <- c('Basal', 'LumB', 'LumC', 'EMT', 'Immune', 'CAF', 'Endothelial', 'SV')
+DotPlot(Pten_P53_ATAC, features=c("Cdh1", "Epcam", "Krt5", "Krt8", "Vim", "Ptprc", "Col1a1", "Pecam1", "Pate4", "Svs5"), dot.min = 0.05, col.min = 0, cols = "RdYlBu", scale.by ="size")+ RotatedAxis()
+
+#Identification of the signature
+DefaultAssay(Pten_P53_ATAC)<-"RNA"
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Pten_P53_ATAC))) 
+{
+z <- FindMarkers(Pten_P53_ATAC,ident.1 = sort(levels(Pten_P53_ATAC))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Pten_P53_ATAC))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+write.table(x=Signatures, file = "Table2_Signatures_ATAC_Fig3C_20230330.csv")
+```
+

@@ -1,0 +1,423 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+#Creation of the Seurat object P53 5 months AGI
+data5mo_10x = Read10X(data.dir = "/Volumes/Dasha_SSD/scRNAseq/MNGC383/MNGC383_filtered_feature_bc_matrix/")
+Ech1 = CreateSeuratObject(data5mo_10x,
+                          project = "p53_5mo",
+                          assay = "RNA",
+                          min.cells = 10,
+                          min.features = 100,
+                          names.field = 1,
+                          names.delim = "_",
+                          meta.data = NULL
+)
+Ech1$orig.ident="p53_5mo"
+Ech1[["percent.mt"]] <- PercentageFeatureSet(Ech1, pattern = "^mt-")
+VlnPlot(Ech1, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size=1, ncol = 3)
+```
+
+```{r}
+  Ech1 <- subset(Ech1, subset = nFeature_RNA > 100 & nFeature_RNA < 7000 & percent.mt < 25)
+    Ech1 <- NormalizeData(Ech1)
+    Ech1 <- FindVariableFeatures(Ech1, selection.method = "vst", nfeatures = 2000)
+    
+# Run the standard workflow for visualization and clustering
+Combi <- ScaleData(Ech1, verbose = FALSE)
+Combi <- RunPCA(Combi, npcs = 50, verbose = FALSE)
+ElbowPlot(Combi, ndims = 50)
+
+# Umap and Clustering
+
+Combi <- FindNeighbors(Combi, reduction = "pca", dims = 1:30)
+Combi <- FindClusters(Combi, resolution = 0.8)
+Combi <- RunUMAP(Combi, dims = 1:30, reduction = "pca", perplexity = 30)
+```
+```{r}
+Combi$CellType <- Idents(Combi)
+DimPlot(Combi, label=TRUE)+NoLegend()
+VlnPlot(Combi, features = c("nCount_RNA", "nFeature_RNA",  "percent.mt"), pt.size=1)
+```
+```{r}
+#remove clusters with abnormal counts and features
+Combi<-subset(Combi, idents = c('0', '12','13', '21'), invert=TRUE)
+Combi <- FindNeighbors(Combi, reduction = "pca", dims = 1:30)
+Combi <- FindClusters(Combi, resolution = 0.8)
+Combi <- RunUMAP(Combi, dims = 1:30, reduction = "pca", perplexity = 30)
+Combi$CellType <- Idents(Combi)
+DimPlot(Combi, label=TRUE)+NoLegend()
+VlnPlot(Combi, features = c("nCount_RNA", "nFeature_RNA",  "percent.mt"), pt.size=1)
+```
+
+```{r}
+#Cluster ids
+DotPlot(Combi, features=c("Cdh1", "Epcam", "Krt5", "Krt8",  "Vim", "Ptprc", "Col1a1", "Pecam1", "Pate4", "Svs5"), col.min = 0.1, dot.min=0.1, assay = 'RNA')+RotatedAxis()
+```
+```{r}
+#Signatures
+Combi@active.ident<-Combi$seurat_clusters
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Combi))) {
+
+z <- FindMarkers(Combi,ident.1 = sort(levels(Combi))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Combi))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Combi_230222.csv") 
+remove(z)
+```
+
+```{r}
+Idents(Combi)<-"CellType"
+new.ids <- c("CAF", "Epithelial", "Immune", "Immune", "Epithelial", 
+             "Immune", "Immune", "Immune", "Immune", "CAF", 
+           "CAF", "CAF", "Immune", "Immune", "Immune", 
+             "EMT",  "Epithelial", "Immune", "Endothelial", "Epithelial",
+             "Immune", "Immune", "Endothelial", "SV")
+names(new.ids) <- levels(Combi)
+Combi <- RenameIdents(Combi, new.ids)
+
+Combi$CellType <-Combi@active.ident
+Combi@active.ident<- factor(Combi@active.ident, levels=rev(c("Immune", "CAF", "Endothelial", "SV", "Epithelial", "EMT")))
+DimPlot(Combi, split.by = 'orig.ident', label=TRUE)
+```
+```{r}
+#Analysis of epithelial populations
+Epithelial<-subset(Combi, idents = c('Epithelial', 'EMT'))
+DimPlot(Epithelial, label = TRUE, split.by = "orig.ident")
+#re-cluster
+Epithelial<-RunPCA(Epithelial, npcs=50)
+ElbowPlot(Epithelial, ndims = 50)
+
+Epithelial<-FindNeighbors(Epithelial, reduction = "pca", dims = 1:10)
+Epithelial<-FindClusters(Epithelial, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Epithelial<-RunUMAP(Epithelial, dims = 1:10, reduction = "pca", perplexity = 30)
+Epithelial$ECellType <- Idents(Epithelial)
+DimPlot(Epithelial, label = TRUE)
+DimPlot(Epithelial, split.by = "orig.ident", label=TRUE)
+VlnPlot(Epithelial, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size=1, ncol = 3)
+```
+
+```{r}
+Combi<-subset(Combi, cells = WhichCells(Epithelial, idents=c("2")), invert=TRUE)
+Epithelial<-subset(Epithelial, cells = WhichCells(Epithelial, idents=c("2")), invert=TRUE)
+Epithelial<-FindNeighbors(Epithelial, reduction = "pca", dims = 1:10)
+Epithelial<-FindClusters(Epithelial, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Epithelial<-RunTSNE(Epithelial, dims = 1:10, reduction = "pca", perplexity = 30)
+Epithelial$ECellType <- Idents(Epithelial)
+DimPlot(Epithelial, label = TRUE, reduction = "tsne")
+```
+```{r}
+#Signatures_epithelial
+
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Epithelial))) {
+
+z <- FindMarkers(Epithelial,ident.1 = sort(levels(Epithelial))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Epithelial))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Epithelial_230222.csv") 
+remove(z)
+```
+0-EMT1    4-LumC    8-EMT2       12-EMT3
+1-LumC    5-Ezh2    9-LumB
+2-Basal   6-LumC    10-LumC
+3-LumC    7-LumA    11-LumB
+```{r}
+DotPlot(Epithelial, features=c("Cdh1", "Epcam","Spink1", "Krt5", "Krt8","Tacstd2", "Ar", "Tmprss2", "Nkx3-1","Vim"), col.min = 0.1, dot.min=0.1, assay = 'RNA')+RotatedAxis()
+```
+```{r}
+#Epithelial_Populations names 
+Epithelial <-subset(Epithelial, idents="0", invert=TRUE)
+Epithelial$ECellType<-Epithelial$RNA_snn_res.0.9
+Epithelial@active.ident<-Epithelial$ECellType
+Epithelial <- RenameIdents(Epithelial,`1`="LumC",`2`="LumC",`3`="EMT",`4`="Basal",`5`="EMT",`6`="LumC",`7`="LumB",`8`="LumC")
+Epithelial$ECellType<-Idents(Epithelial)
+DimPlot (Epithelial, split.by = "orig.ident")
+
+cells.use<-WhichCells(Epithelial, idents = "EMT")
+Combi<-SetIdent(Combi, cells=cells.use, value='EMT')
+
+cells.use<-WhichCells(Epithelial, idents = "Basal")
+Combi<-SetIdent(Combi, cells=cells.use, value='Basal')
+
+cells.use<-WhichCells(Epithelial, idents = "LumC")
+Combi<-SetIdent(Combi, cells=cells.use, value='LumC')
+
+cells.use<-WhichCells(Epithelial, idents = "LumB")
+Combi<-SetIdent(Combi, cells=cells.use, value='LumB')
+
+Combi<-subset(Combi, idents="Epithelial", invert=TRUE)
+Combi$ECellType<-Combi@active.ident
+DimPlot(Combi, label=TRUE)
+```
+```{r}
+#Analysis of immune populations
+Immune<-subset(Combi, idents = c("Immune"))
+DimPlot(Immune, label = TRUE)
+
+#re-cluster
+Immune<-FindNeighbors(Immune, reduction = "pca", dims = 1:10)
+Immune<-FindClusters(Immune, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Immune<-RunUMAP(Immune, dims = 1:10, reduction = "pca", perplexity = 30)
+
+Immune$ICellType <- Idents(Immune)
+DimPlot(Immune, label = TRUE)
+VlnPlot(Immune, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size=1, ncol = 3)
+```
+
+```{r}
+Immune<-subset(Immune, idents = c("8"), invert=TRUE)
+Immune<-FindNeighbors(Immune, reduction = "pca", dims = 1:10)
+Immune<-FindClusters(Immune, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Immune<-RunTSNE(Immune, dims = 1:10, reduction = "pca", perplexity = 30)
+
+Immune$ICellType <- Idents(Immune)
+DimPlot(Immune, label = TRUE, reduction="tsne")
+DimPlot(Immune, label = TRUE, reduction="umap")
+```
+```{r}
+#Identify clusters
+DotPlot(Immune, features=c("Adgre1","C5ar1", "Fcgr1","S100a9","S100a8","Itgam", "Cd3e", "Cd8a","Cd4", "Xcr1", "Itgax",  "Cd19", "Cd79a", "Mki67", "Top2a"), assay = "RNA", dot.min=0.05, col.min = 0.5 ) + RotatedAxis()
+```
+```{r}
+#Signatures_immune
+
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Immune))) {
+
+z <- FindMarkers(Immune,ident.1 = sort(levels(Immune))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Immune))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Immune_230412.csv") 
+remove(z)
+```
+
+```{r}
+#Immune Populations names 
+Immune <- RenameIdents(Immune,
+                       `0`="Neutrophil",`1`="Macrophage",`2`="Macrophage",`3`="Neutrophil",
+                       `4`="Macrophage",`5`="Tcells",`6`="Macrophage",`7`="DC",`8`="Tcells",`9`="Tcells",
+                       `10`="Prolif", `11`="Tcells",`12`="Bcells")
+Immune$ICellType<-Idents(Immune)
+DimPlot (Immune, split.by = "orig.ident")
+
+Combi@active.ident<-Combi$ECellType
+
+cells.use<-WhichCells(Immune, idents = "Bcells")
+Combi<-SetIdent(Combi, cells=cells.use, value='Bcells')
+
+cells.use<-WhichCells(Immune, idents = "DC")
+Combi<-SetIdent(Combi, cells=cells.use, value='DC')
+
+cells.use<-WhichCells(Immune, idents = "Macrophage")
+Combi<-SetIdent(Combi, cells=cells.use, value='Macrophage')
+
+cells.use<-WhichCells(Immune, idents = "Neutrophil")
+Combi<-SetIdent(Combi, cells=cells.use, value='Neutrophil')
+
+cells.use<-WhichCells(Immune, idents = "Tcells")
+Combi<-SetIdent(Combi, cells=cells.use, value='Tcells')
+
+cells.use<-WhichCells(Immune, idents = "Prolif")
+Combi<-SetIdent(Combi, cells=cells.use, value='Prolif')
+
+
+Combi$ICellType<-Combi@active.ident
+Combi<-subset(Combi, idents="Immune", invert=TRUE)
+DimPlot(Combi, label=TRUE)+NoLegend()
+```
+
+```{r}
+#Analysis of stromal populations
+Stroma<-subset(Combi, idents = c("CAF", "Endothelial"))
+
+#re-cluster
+Stroma<-FindNeighbors(Stroma, reduction = "pca", dims = 1:10)
+Stroma<-FindClusters(Stroma, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Stroma<-RunTSNE(Stroma, dims = 1:10, reduction = "pca", perplexity = 30)
+
+Stroma$SCellType <- Idents(Stroma)
+DimPlot(Stroma, label = TRUE, reduction="tsne")
+DimPlot(Stroma, label = TRUE, reduction="umap")
+VlnPlot(Stroma, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), pt.size=1, ncol = 3)
+```
+
+```{r}
+#Remove cluster w low RNAcount
+cells_to_exclude2<-subset(Stroma, idents=c("1", "3", "8", "12"))
+Combi<-subset(Combi, cells = WhichCells(cells_to_exclude2), invert=TRUE)
+
+Stroma<-subset(Stroma, idents = c("1", "3", "8", "12"), invert=TRUE)
+Stroma<-FindNeighbors(Stroma, reduction = "pca", dims = 1:10)
+Stroma<-FindClusters(Stroma, resolution = 0.9, verbose = 0, save.SNN=TRUE)
+Stroma<-RunUMAP(Stroma, dims = 1:10, reduction = "pca", perplexity = 30)
+Stroma<-RunTSNE(Stroma, dims = 1:10, reduction = "pca", perplexity = 30)
+DimPlot(Stroma, label = TRUE, reduction="umap")
+DimPlot(Stroma, label = TRUE, reduction="tsne")
+```
+```{r}
+#Identify clusters
+DotPlot(Stroma, features=c("Pecam1", "Wnt2","Rorb", "Wif1", "Ifitm1", "C3", "Il6", "Cxcl12", "Dpt", "Has1", "Cxcl1", "Ccl2", "Acta2", "Tagln", "Myl9", "Mmp11", "Postn", "Tpm1", "Tpm2"), assay = "RNA", dot.min=0.1, col.min = 0) + RotatedAxis()
+```
+```{r}
+#Signatures_stroma
+
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Stroma))) {
+
+z <- FindMarkers(Stroma,ident.1 = sort(levels(Stroma))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Stroma))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Stroma_230412.csv") 
+remove(z)
+```
+
+```{r}
+#Stroma Populations names 
+Stroma@active.ident<-Stroma$RNA_snn_res.0.9
+Stroma <- RenameIdents(Stroma,
+                       `0`="myCAF",`1`="iCAF",`2`="myCAF",`3`="iCAF",`4`="Ductal",
+                       `5`="myCAF",`6`="Endothelial",`7`="iCAF",`8`="Ductal",`9`="iCAF")
+Stroma$SCellType<-Idents(Stroma)
+DimPlot (Stroma, split.by = "orig.ident")
+
+cells.use<-WhichCells(Stroma, idents = "iCAF")
+Combi<-SetIdent(Combi, cells=cells.use, value='iCAF')
+
+cells.use<-WhichCells(Stroma, idents = "myCAF")
+Combi<-SetIdent(Combi, cells=cells.use, value='myCAF')
+
+cells.use<-WhichCells(Stroma, idents = "Ductal")
+Combi<-SetIdent(Combi, cells=cells.use, value='Ductal')
+
+cells.use<-WhichCells(Stroma, idents = "Endothelial")
+Combi<-SetIdent(Combi, cells=cells.use, value='Endothelial')
+
+Combi$SCellType<-Combi@active.ident
+DimPlot(Combi, label=T)
+```
+
+
+```{r}
+#Markers combi clusters
+
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Combi))) {
+
+z <- FindMarkers(Combi,ident.1 = sort(levels(Combi))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Combi))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Combi_230222_EMT.csv") 
+remove(z)
+```
+
+```{r}
+Combi<-RunUMAP(Combi, dims = 1:30, reduction = "pca", perplexity = 20)
+#Combi<-RunTSNE(Combi, dims = 1:30, reduction = "pca", perplexity = 20)
+DimPlot(Combi, label=TRUE, reduction="umap")
+#DimPlot(Combi, label=TRUE, reduction="tsne")
+```
+
+
+
+```{r}
+Stroma<-subset(Stroma, idents=c("3", "5"), invert=TRUE)
+
+iCAF<-list(c("Il6", "Pdgfra", "Cxcl12", "Dpt", "Lmna", "Has1", "Cxcl1", "Cxcl2", "Ccl2"))
+Stroma <- AddModuleScore(object = Stroma, features = iCAF, name = "iCAF_score")
+FeaturePlot(object = Stroma, features = c("iCAF_score1"), label=T, order=T, min.cutoff = 0, reduction="tsne")
+VlnPlot(Stroma, features = "iCAF_score1")
+
+myCAF<-list(c("Acta2", "Tagln", "Mmp11", "Myl9", "Hopx", "Postn", "Tpm1", "Tpm2"))
+Stroma <- AddModuleScore(object = Stroma, features = myCAF, name = "myCAF_score")
+FeaturePlot(object = Stroma, features = c("myCAF_score1"), label=T, order=T, min.cutoff = 0, reduction="tsne")
+VlnPlot(Stroma, features = "myCAF_score1")
+
+Ductal<-list(c("Wnt2", "Rorb", "Wif1", "Ifitm1", "Srd5a2"))
+Stroma <- AddModuleScore(object = Stroma, features = Ductal, name = "Ductal_score")
+FeaturePlot(object = Stroma, features = c("Ductal_score1"), label=T, order=T, min.cutoff = 0, reduction="tsne")
+VlnPlot(Stroma, features = "Ductal_score1")
+
+Urethral<-list(c("Lgr5", "Apoe", "Osr1", "Sfrp2", "Mfap4"))
+Stroma <- AddModuleScore(object = Stroma, features = Urethral, name = "Urethral_score")
+FeaturePlot(object = Stroma, features = c("Urethral_score1"), label=T, order=T, min.cutoff = 0, reduction="tsne")
+VlnPlot(Stroma, features = "Urethral_score1")
+```
+
+
+```{r}
+DimPlot(Stroma, cells.highlight = WhichCells(Stroma, expression=Il6>1, idents = "iCAF"))
+Il6High<-WhichCells(Stroma, expression=Il6>1, idents = "iCAF")
+Combi$Il6high<-Combi$FCellType
+Combi@active.ident<-Combi$Il6high
+Combi<-SetIdent(Combi, cells=Il6High, value='Il6High')
+Combi@active.ident->Combi$Il6high
+
+#Signatures
+Combi@active.ident<-Combi$Il6high
+Signatures<-data.frame()
+
+for (i in 1:length(levels(Combi))) {
+
+z <- FindMarkers(Combi,ident.1 = sort(levels(Combi))[i], logfc.threshold = 0.25, min.pct = 0.5, verbose = T, only.pos = T)
+z$gene <-rownames(z)
+z$cluster <- sort(levels(Combi))[[i]]
+Signatures<- rbind(Signatures, z)
+}
+Signatures<-filter(Signatures, p_val_adj<=0.05)
+write.table(x=Signatures, file = "Signatures_Combi_Il6high_230301.csv") 
+remove(z)
+```
+
+```{r}
+#Fig4B
+Combi@active.ident<-Combi$CellType
+levels(Combi)<-c("Epithelial", "EMT", "Immune", "CAF", "Endothelial", "SV")
+markers1<-DotPlot(Combi, features=c("Cdh1", "Epcam", "Krt5", "Krt8",  "Vim", "Ptprc", "Col1a1", "Pecam1", "Pate4", "Svs5"), dot.min = 0.05, col.min = 0, cols = "RdYlBu", scale.by ="size")+ RotatedAxis()
+markers1
+ggsave(plot=markers1, "markers1.pdf", path="/Volumes/Dasha_SSD/MANUSCRIPT P53/data/Fig4B", width=12, height=4, dpi=300)
+
+#Fig4F
+VlnPlot(Epithelial, features="Vim", idents = c("LumC", "EMT"))+stat_compare_means(method="wilcox.test", paired=FALSE)`
+VlnPlot(Epithelial, features="Sparc", idents = c("LumC", "EMT"))+stat_compare_means(method="wilcox.test", paired=FALSE)
+VlnPlot(Epithelial, features="Csf1", idents = c("LumC", "EMT"))+stat_compare_means(method="wilcox.test", paired=FALSE)
+VlnPlot(Epithelial, features="Il6ra", idents = c("LumC", "EMT"))+stat_compare_means(method="wilcox.test", paired=FALSE)
+VlnPlot(Epithelial, features=c("Vim", "Sparc"), idents = c("LumC", "EMT")))
+VlnPlot(Epithelial, features=c("Csf1", "Il6ra"), idents = c("LumC", "EMT")))
+
+#Supp Fig 3B
+Epithelial@active.ident<-Epithelial$ECellType
+levels(Epithelial)<-c("LumB", "LumC", "Basal", "EMT")
+markers1<-DotPlot(Epithelial, features=c("Cdh1", "Epcam", "Spink1","Krt5", "Krt8",  "Tacstd2", "Ar", "Tmprss2", "Nkx3-1", "Vim"), dot.min = 0.05, col.min = 0, cols = "RdYlBu", scale.by ="size")+ RotatedAxis()
+markers1
+ggsave(plot=markers1, "markers1.pdf", path="/Volumes/Dasha_SSD/MANUSCRIPT P53/data/SuppFig3B", width=12, height=4, dpi=300)
+
+#Supp Fig 3E
+Immune@active.ident<-Immune$ICellType
+levels(Immune)<-c("Macrophage", "Neutrophil", "Tcells", "DC", "Prolif", "Bcells")
+markers1<-DotPlot(Immune, features=c("Adgre1", "Fcgr1", "C5ar1","S100a8", "S100a9",  "Itgam", "Cd3e", "Cd4", "Cd8a", "Xcr1", "Itgax", "Cd19", "Cd79a", "Mki67", "Top2a"), dot.min = 0.05, col.min = 0, cols = "RdYlBu", scale.by ="size")+ RotatedAxis()
+markers1
+ggsave(plot=markers1, "markers1.pdf", path="/Volumes/Dasha_SSD/MANUSCRIPT P53/data/SuppFig3E", width=12, height=4, dpi=300)
+```
